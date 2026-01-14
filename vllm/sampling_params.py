@@ -81,6 +81,20 @@ class RequestOutputKind(Enum):
     # Do not return intermediate RequestOutput
     FINAL_ONLY = 2
 
+@dataclass
+class SoftGenerationParams:
+    """
+    Configuration for Soft Generation (Soft Thinking) feature
+    """
+    
+    enable: bool = False  # Whether to enable Soft Generation
+    max_think_len: int = 512 # Maximum length for the "thinking" phase in soft thinking
+    logprobs: int = 20  # Number of logprobs to store during soft thinking
+    eot_string: str = "</think>"  # End-of-thinking string marker
+    prefill_string: str = ""  # String to indicate the start of the thinking phase
+    enable_cold_stop: bool = False  # Whether to enable cold stopping in Soft Thinking
+    cold_stop_len_threshold: int = 128  # Length threshold to Soft Thinking's cold stop
+    cold_stop_entropy_threshold: float = 0.01  # Entropy threshold for triggering cold stop
 
 class SamplingParams(
         msgspec.Struct,
@@ -184,6 +198,9 @@ class SamplingParams(
     set to an integer k, will use only the last k tokens from the prompt
     (i.e., left truncation). If set to `None`, truncation is disabled."""
     output_kind: RequestOutputKind = RequestOutputKind.CUMULATIVE
+
+    soft_generation: Optional[SoftGenerationParams] = None
+    """Parameters for configuring Soft Generation (Soft Thinking) feature."""
 
     # The below fields are not supposed to be used as an input.
     # They are set in post_init.
@@ -369,6 +386,8 @@ class SamplingParams(
                 stacklevel=2)
             self.structured_outputs = self.guided_decoding
             self.guided_decoding = None
+        if self.soft_generation is not None:
+            self.logprobs = self.soft_generation.logprobs
 
     def _verify_args(self) -> None:
         if not isinstance(self.n, int):
@@ -576,6 +595,7 @@ class SamplingParams(
             f"{self.spaces_between_special_tokens}, "
             f"truncate_prompt_tokens={self.truncate_prompt_tokens}, "
             f"structured_outputs={self.structured_outputs}, "
+            f"soft_generation={self.soft_generation}, "
             f"extra_args={self.extra_args})")
 
 

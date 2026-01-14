@@ -2202,6 +2202,16 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             req_state = self.requests[req_id]
             req_state.output_token_ids.extend(sampled_ids)
 
+        soft_token_embeds, soft_req_idx = self._apply_soft_embedding(logprobs_tensors, self.input_batch.sampling_metadata)
+        for i, req_idx in enumerate(soft_req_idx):
+            embed = soft_token_embeds[i]
+            req_id = req_ids[req_idx]
+            start_idx = self.input_batch.num_tokens_no_spec[req_idx]
+            self.input_batch.req_output_embeds[req_idx].append((start_idx, embed))
+            req_state = self.requests[req_id]
+            req_state.output_embeds.append((start_idx, embed))
+            new_soft_flag = self._update_soft_flag(req_state)
+
         return (
             num_nans_in_logits,
             logprobs_lists,
@@ -4158,3 +4168,34 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.transfer_event.record()
         self.transfer_event.synchronize()
         return pinned.tolist()
+
+    def _apply_soft_embedding(self, logprobs_tensors, sampling_metadata: SamplingMetadata):
+        if logprobs_tensors is None:
+            return None, []
+        soft_req_idx = sampling_metadata.soft_generation_flag.nonzero().squeeze().tolist()
+        if soft_num := len(soft_req_idx) == 0:
+            return None, []
+        logprob_token_ids = logprobs_tensors.logprob_token_ids
+        logprobs = logprobs_tensors.logprobs
+        selected_token_ranks = logprobs_tensors.selected_token_ranks
+
+        token_weights = torch.exp(logprobs[soft_req_idx][:, 1:])  # [num_soft, num_logprobs]
+        token_ids = logprob_token_ids[soft_req_idx][:, 1:]  # [num_soft, num_logprobs]
+
+        # Get embeddings and compute soft tokens
+        output_embeds : torch.Tensor = self.model.get_input_embeddings(input_ids=token_ids.flatten())  # [num_soft* num_logprobs, dim]
+        output_embeds = output_embeds.view(soft_num, -1, output_embeds.size(-1))  # [num_soft, num_logprobs, dim]
+        output_embeds = output_embeds * token_weights.unsqueeze(-1).sum(dim=1)  # [num_soft, dim]
+        noise_scale = sampling_metadata.soft_generation_noise_scale[soft_req_idx]  # [num_soft]
+        noise = torch.randn_like(output_embeds)  # [num_soft, dim]
+        output_embeds = output_embeds + noise * noise_scale.unsqueeze(-1)
+        return output_embeds, soft_req_idx # req_idx
+
+    def update_soft_flag(self, req_state:CachedRequestState):
+        """
+        Update the soft generation flag for the request state.
+        This is used to determine if the request is a soft generation request.
+        """
+        new_flag = False
+        # max_len update
+        max_think_len = req_state.sampling_params.soft_generation.max_think_len

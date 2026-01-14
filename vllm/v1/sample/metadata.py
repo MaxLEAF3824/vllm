@@ -41,3 +41,8 @@ class SamplingMetadata:
 
     # Loaded logits processors
     logitsprocs: LogitsProcessors
+
+    # soft generation related
+    soft_generation_flag: Optional[torch.Tensor]
+    soft_generation_temperature: Optional[torch.Tensor]
+    soft_generation_noise_scale: Optional[torch.Tensor]

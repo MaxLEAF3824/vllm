@@ -23,7 +23,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.utils import is_spec_decode_unsupported
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
-
+from vllm.v1.outputs import LogprobsLists
 
 @dataclass
 class CachedRequestState:
@@ -38,6 +38,8 @@ class CachedRequestState:
     block_ids: tuple[list[int], ...]
     num_computed_tokens: int
     output_token_ids: list[int]
+    output_token_embeds: dict[int, torch.Tensor]
+    output_logprobs:dict[int, LogprobsLists]
 
     mrope_positions: Optional[torch.Tensor] = None
     mrope_position_delta: Optional[int] = None
@@ -218,6 +220,10 @@ class InputBatch:
         self.repetition_penalties_cpu = \
             self.repetition_penalties_cpu_tensor.numpy()
         self.repetition_penalties_reqs: set[str] = set()
+
+        self.soft_generation_flag = torch.zeros((max_num_reqs, ), dtype=torch.bool, device=device)
+        self.soft_generation_temperature = torch.zeros((max_num_reqs, ), dtype=torch.float32, device=device)
+        self.soft_generation_noise_scale = torch.zeros((max_num_reqs, ), dtype=torch.float32, device=device)
 
         # Speculative decoding
         self.num_accepted_tokens_cpu_tensor = torch.ones((max_num_reqs, ),
